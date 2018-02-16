@@ -20,15 +20,12 @@ import com.esotericsoftware.kryo.io.Input;
 import com.esotericsoftware.kryo.io.Output;
 import com.google.common.collect.ImmutableSortedMap;
 import org.apache.commons.io.IOUtils;
-import org.gradle.api.Action;
 import org.gradle.api.NonNullApi;
 import org.gradle.api.UncheckedIOException;
 import org.gradle.cache.PersistentCache;
 import org.gradle.internal.Factory;
 import org.gradle.internal.hash.HashCode;
 import org.gradle.internal.io.IoAction;
-import org.gradle.internal.resource.local.LocallyAvailableResource;
-import org.gradle.internal.resource.local.PathKeyFileStore;
 
 import javax.annotation.Nullable;
 import java.io.ByteArrayInputStream;
@@ -57,12 +54,12 @@ public class DirectoryLocalBuildCacheServiceV2 implements LocalBuildCacheService
     private static final int CODE_MANIFEST = 1;
     private static final int CODE_RESULT = 2;
 
-    private final PathKeyFileStore fileStore;
+    private final HashFileStore fileStore;
     private final PersistentCache persistentCache;
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
-    public DirectoryLocalBuildCacheServiceV2(PathKeyFileStore fileStore, PersistentCache persistentCache) {
-        this.fileStore = fileStore;
+    public DirectoryLocalBuildCacheServiceV2(PersistentCache persistentCache) {
+        this.fileStore = new DefaultHashFileStore(persistentCache.getBaseDir());
         this.persistentCache = persistentCache;
     }
 
@@ -144,12 +141,12 @@ public class DirectoryLocalBuildCacheServiceV2 implements LocalBuildCacheService
             public T create() {
                 lock.readLock().lock();
                 try {
-                    LocallyAvailableResource resource = fileStore.get(key.toString());
-                    if (resource == null) {
-                        return null;
-                    }
                     try {
-                        InputStream input = new FileInputStream(resource.getFile());
+                        File resource = fileStore.get(key);
+                        if (resource == null) {
+                            return null;
+                        }
+                        InputStream input = new FileInputStream(resource);
                         try {
                             int code = input.read();
                             return entryReader.readEntry(code, input);
@@ -224,29 +221,26 @@ public class DirectoryLocalBuildCacheServiceV2 implements LocalBuildCacheService
         }));
     }
 
-    private void put(final HashCode hashCode, final int code, final IoAction<OutputStream> action) {
+    private void put(final HashCode key, final int code, final IoAction<OutputStream> action) {
         persistentCache.withFileLock(new Runnable() {
             @Override
             public void run() {
-                String key = hashCode.toString();
                 lock.writeLock().lock();
                 try {
-                    fileStore.add(key, new Action<File>() {
+                    fileStore.put(key, new IoAction<File>() {
                         @Override
-                        public void execute(File file) {
+                        public void execute(File file) throws IOException {
+                            OutputStream output = new FileOutputStream(file);
                             try {
-                                OutputStream output = new FileOutputStream(file);
-                                try {
-                                    output.write(code);
-                                    action.execute(output);
-                                } finally {
-                                    IOUtils.closeQuietly(output);
-                                }
-                            } catch (IOException e) {
-                                throw new UncheckedIOException(e);
+                                output.write(code);
+                                action.execute(output);
+                            } finally {
+                                IOUtils.closeQuietly(output);
                             }
                         }
                     });
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
                 } finally {
                     lock.writeLock().unlock();
                 }
