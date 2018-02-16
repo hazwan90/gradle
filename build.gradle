@@ -345,11 +345,8 @@ subprojects { prj ->
     }
 }
 
-gradle.buildFinished { result ->
-    def rootProject = result.gradle.rootProject
-    if (!rootProject.availableJavaInstallations.validBuildCacheConfiguration) {
-        logger.warn("In order to have cache hits from the remote build cache you need to set 'java7Home' in your gradle.properties!")
-    }
+afterEvaluate {
+    rootProject.availableJavaInstallations.validateBuildCacheConfiguration(gradle.settings.buildCache)
 }
 
 apply from: "gradle/ciReporting.gradle"
